@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 
 // Не забудьте переименовать эти классы и интерфейсы!
 
@@ -7,7 +7,7 @@ interface MyPluginSettings {
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	mySetting: 'manual'
 }
 
 export default class MyPlugin extends Plugin {
@@ -15,6 +15,8 @@ export default class MyPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.registerStyles();
 		new Notice('This is a notice!');
 		// Создает иконку в левой боковой панели.
 		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
@@ -67,7 +69,7 @@ export default class MyPlugin extends Plugin {
 		});
 
 		// Добавляет вкладку настроек, чтобы пользователь мог настроить различные аспекты плагина.
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		// this.addSettingTab(new SampleSettingTab(this.app, this));
 
 		// Если плагин подключает глобальные события DOM (на частях приложения, которые не принадлежат этому плагину),
 		// использование этой функции автоматически удалит обработчик события при отключении плагина.
@@ -91,6 +93,35 @@ export default class MyPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	registerStyles() {
+		const style = document.createElement('style');
+		style.textContent = `
+			.rule-group {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				border: 1px solid #ccc;
+				padding: 10px;
+				margin-top: 10px;
+				border-radius: 5px;
+			}
+	
+			.rule-group .setting-item {
+				flex: 1;
+				margin-right: 10px;
+			}
+	
+			.rule-group .setting-item:last-child {
+				margin-right: 0;
+			}
+	
+			.rule-group .setting-item input {
+				width: 100%;
+			}
+		`;
+		document.head.appendChild(style);
+	}
+
 	/**
 	 * Асинхронно находит и отображает теги в текущей активной Markdown заметке.
 	 * 
@@ -108,24 +139,41 @@ export default class MyPlugin extends Plugin {
 	 * 
 	 * @returns {Promise<void>} Обещание, которое разрешается, когда теги найдены и отображены.
 	 */
-	async findTagsInNote() {
-		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!activeView) return;
+	async findTagsInNote(file?: TFile) {
+		let activeFile = file;
 
-		const content = activeView.getViewData();
-		console.log('CONTENT', content);
+		if (!activeFile) {
+			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!activeView) {
+				return;
+			}
+			if (activeView.file) {
+				activeFile = activeView.file;
+			}
+		}
 
-		const file = activeView.file;
-		if (!file) return;
+		if (!activeFile) {
+			return;
+		}
 
-		const fileCache = this.app.metadataCache.getFileCache(file);
-		const tags = [
-			...(fileCache?.frontmatter?.tags.map(tag => tag.replace('#', '')) || []),
-			...(fileCache?.tags?.map(tag => tag.tag.replace('#', '')) || [])
-		];
+		const content = await this.app.vault.read(activeFile);
+		console.log('CONTENT \n', content);
 
+		const fileCache = this.app.metadataCache.getFileCache(activeFile);
+		console.log('FILECACHE', fileCache);
+
+		const frontmatterTags = (fileCache?.frontmatter?.tags || []).map((tag) => {
+			return tag.replace(/#/g, '');
+		});
+
+		const fileCacheTags = (fileCache?.tags || []).map((tag) => {
+			return tag.tag.replace(/#/g, '');
+		});
+
+		let tags = [...new Set([...frontmatterTags, ...fileCacheTags])];
 		console.log('TAGS', tags);
 		new Notice(`Found tags: ${tags.join(', ')}`);
+		return tags;
 	}
 }
 
@@ -159,14 +207,80 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
+			.setName('Способ сканирования')
+			.setDesc('Ручной - сканирование происходит при нажатии кнопки приложения.\n Автоматический - сканирование во время запуска Obsidian и после каждого сохранения заметки.')
+			.addDropdown(dropdown => dropdown
+				.addOption('manual', 'Ручной')
+				.addOption('auto', 'Автоматический')
 				.setValue(this.plugin.settings.mySetting)
 				.onChange(async (value) => {
 					this.plugin.settings.mySetting = value;
 					await this.plugin.saveSettings();
+				})
+			);
+
+		const addButton = new Setting(containerEl)
+			.addButton(button => {
+				button.setButtonText('Добавить правило')
+					.setCta()
+					.onClick(() => {
+						this.addRule(containerEl);
+					});
+			});
+	}
+
+	addRule(containerEl: HTMLElement): void {
+		const ruleContainer = containerEl.createDiv('rule-container');
+		ruleContainer.addClass('rule-group');
+
+		// Поле для ввода пути сканирования
+		new Setting(ruleContainer)
+			.setName('Путь сканирования')
+			.addText(text => text
+				.setPlaceholder('Введите путь сканирования')
+				.onChange(async (value) => {
+					console.log('Путь сканирования: ', value);
+					// Здесь можно сохранить значение в настройки плагина
 				}));
+
+		// Поле для ввода пути перемещения файла
+		new Setting(ruleContainer)
+			.setName('Путь куда перемещать заметку')
+			.addText(text => text
+				.setPlaceholder('Введите путь куда перемещать заметку')
+				.onChange(async (value) => {
+					console.log('Путь куда перемещать заметку: ', value);
+					// Здесь можно сохранить значение в настройки плагина
+				}));
+
+		// Кнопка для добавления правила
+		const addRuleButton = document.createElement('button');
+		addRuleButton.textContent = 'Добавить правило';
+		addRuleButton.onclick = () => {
+			const attributeRuleContainer = ruleContainer.createDiv('attribute-rule-container');
+			attributeRuleContainer.addClass('attribute-rule-group');
+
+			// Поле для ввода имени атрибута заметки
+			new Setting(attributeRuleContainer)
+				.setName('Имя атрибута')
+				.addText(text => text
+					.setPlaceholder('Введите имя атрибута (например, tags, alias)')
+					.onChange(async (value) => {
+						console.log('Имя атрибута: ', value);
+						// Здесь можно сохранить значение в настройки плагина
+					}));
+
+			// Поле для ввода самого правила
+			new Setting(attributeRuleContainer)
+				.setName('Правило')
+				.addText(text => text
+					.setPlaceholder('Введите правило')
+					.onChange(async (value) => {
+						console.log('Правило: ', value);
+						// Здесь можно сохранить значение в настройки плагина
+					}));
+		};
+
+		ruleContainer.appendChild(addRuleButton);
 	}
 }
